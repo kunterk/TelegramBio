@@ -1,0 +1,44 @@
+version: '3.9'
+
+services:
+  telegram-bio:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: telegram-bio-scrobbler
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: production
+      API_ID: ${API_ID}
+      API_HASH: ${API_HASH}
+      SESSION_STRING: ${SESSION_STRING}
+      LASTFM_API_KEY: ${LASTFM_API_KEY}
+      LASTFM_USERNAME: ${LASTFM_USERNAME}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      POLL_INTERVAL: ${POLL_INTERVAL:-30}
+      BIO_MAX_LEN: ${BIO_MAX_LEN:-140}
+    volumes:
+      # Persist bot state
+      - ./bot_state.json:/app/bot_state.json
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000/api/status"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 512M
+        reservations:
+          cpus: '0.5'
+          memory: 256M
