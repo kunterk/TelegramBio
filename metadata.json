@@ -1,0 +1,6 @@
+{
+  "name": "Telegram Bio Scrobbler",
+  "description": "Real-time Telegram bio scrobbler dashboard and bot controller that automatically updates your bio with your currently playing track from Last.fm.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
