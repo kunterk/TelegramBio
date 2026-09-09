@@ -1,4 +1,5 @@
-import React from 'react';
+import React, { useState } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
 import {
   Music,
   Radio,
@@ -10,6 +11,8 @@ import {
   FastForward,
   RotateCcw,
   Sparkles,
+  ExternalLink,
+  X,
 } from 'lucide-react';
 import { RunnerStatus } from '../types';
 
@@ -18,6 +21,7 @@ interface StatusOverviewProps {
   onFastForward: (hours: number) => void;
   onResetState: () => void;
   onOpenSessionHelper?: () => void;
+  onSetOverride: (type: 'temporary' | 'permanent' | 'none') => void;
 }
 
 export const StatusOverview: React.FC<StatusOverviewProps> = ({
@@ -25,8 +29,19 @@ export const StatusOverview: React.FC<StatusOverviewProps> = ({
   onFastForward,
   onResetState,
   onOpenSessionHelper,
+  onSetOverride,
 }) => {
   if (!status) return null;
+
+  const [showTooltip, setShowTooltip] = useState(false);
+  const [isDismissed, setIsDismissed] = useState(() => {
+    return localStorage.getItem('setupBannerDismissed') === 'true';
+  });
+
+  const dismissBanner = () => {
+    setIsDismissed(true);
+    localStorage.setItem('setupBannerDismissed', 'true');
+  };
 
   const bioLength = status.currentBio.length;
   const isOverLimit = bioLength > status.bioMaxLen;
@@ -37,38 +52,110 @@ export const StatusOverview: React.FC<StatusOverviewProps> = ({
   const minutesLeft = Math.floor((status.gracePeriodRemainingSeconds % 3600) / 60);
   const secondsLeft = Math.floor(status.gracePeriodRemainingSeconds % 60);
 
+  // Smart Helper Configuration Logic (identical to Settings Assistant)
+  const hasLegitField =
+    (status.username && status.username !== 'Demo User') ||
+    status.hasApiKey ||
+    status.apiIdConfigured ||
+    status.apiHashConfigured ||
+    status.sessionStringConfigured;
+
+  const dynamicButtonText = hasLegitField ? 'Help me with the rest 🥹' : 'Generate All 🫣';
+
+  const getSetupStatus = () => {
+    if (!status.username || status.username === 'Demo User') {
+      return {
+        stage: 'lastfm-user',
+        actionLabel: 'Open Last.fm Registration Page',
+        actionUrl: 'https://www.last.fm/join',
+        isUrl: true,
+      };
+    }
+    if (!status.hasApiKey) {
+      return {
+        stage: 'lastfm-key',
+        actionLabel: 'Open Last.fm Create API Page',
+        actionUrl: 'https://www.last.fm/api/account/create',
+        isUrl: true,
+      };
+    }
+    if (!status.apiIdConfigured || !status.apiHashConfigured) {
+      return {
+        stage: 'telegram-creds',
+        actionLabel: 'Open my.telegram.org/apps',
+        actionUrl: 'https://my.telegram.org/apps',
+        isUrl: true,
+      };
+    }
+    return {
+      stage: 'telegram-session',
+      actionLabel: 'Launch Session Generator',
+      isUrl: false,
+    };
+  };
+
+  const setupGuide = getSetupStatus();
+
+  const handleSmartHelperClick = () => {
+    if (setupGuide.isUrl && setupGuide.actionUrl) {
+      window.open(setupGuide.actionUrl, '_blank', 'noopener,noreferrer');
+    } else {
+      if (onOpenSessionHelper) {
+        onOpenSessionHelper();
+      }
+    }
+  };
+
   return (
     <div className="space-y-4">
-      {/* Telegram Session & Credentials Alert Banner */}
-      {!status.hasTelegramCredentials && onOpenSessionHelper && (
-        <div className="p-3.5 rounded-xl bg-gradient-to-r from-sky-950/60 to-indigo-950/60 border border-sky-800/60 flex flex-wrap items-center justify-between gap-3 text-xs">
-          <div className="flex items-center gap-2.5">
-            <div className="h-8 w-8 rounded-lg bg-sky-500/20 border border-sky-400/30 flex items-center justify-center text-sky-400 shrink-0">
-              <Shield className="w-4 h-4" />
-            </div>
-            <div>
-              <p className="font-semibold text-slate-100">
-                Telegram Credentials Required for Live MTProto Updates
-              </p>
-              <p className="text-slate-400 text-[11px] mt-0.5">
-                Generate your <code className="text-sky-300">SESSION_STRING</code> and configure{' '}
-                <code className="text-sky-300">API_ID</code> &amp;{' '}
-                <code className="text-sky-300">API_HASH</code> to connect your real Telegram account.
-              </p>
-            </div>
-          </div>
-          <button
-            id="btn-banner-session-helper"
-            onClick={onOpenSessionHelper}
-            className="px-3.5 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-white font-medium flex items-center gap-1.5 transition-colors shadow-sm shadow-sky-950"
+      {/* Setup Progress & Live Connection Assistant (Floating Flyout Toast) */}
+      <AnimatePresence>
+        {!isDismissed && !status.hasTelegramCredentials && onOpenSessionHelper && (
+          <motion.div
+            initial={{ opacity: 0, x: 50, y: -20, scale: 0.9 }}
+            animate={{ opacity: 1, x: 0, y: 0, scale: 1 }}
+            exit={{ opacity: 0, x: 50, y: -20, scale: 0.9 }}
+            transition={{ type: 'spring', stiffness: 300, damping: 25 }}
+            className="fixed top-20 right-6 z-[9999] w-full max-w-[340px] p-4 rounded-xl border border-sky-500/30 bg-slate-900/95 backdrop-blur shadow-2xl shadow-slate-950/80 text-xs flex gap-3.5 items-start justify-between"
           >
-            <Sparkles className="w-3.5 h-3.5" />
-            <span>Generate Credentials / Session</span>
-          </button>
-        </div>
-      )}
+            <div className="flex gap-2.5 items-start">
+              <div className="h-8 w-8 rounded-lg bg-sky-500/10 border border-sky-400/20 flex items-center justify-center text-sky-400 shrink-0 mt-0.5">
+                <Sparkles className="w-4 h-4" />
+              </div>
+              <div className="space-y-1">
+                <h4 className="font-bold text-slate-100 flex items-center gap-1.5">
+                  Sandbox Active
+                  <span className="text-[9px] uppercase font-mono px-1 py-0.5 rounded bg-sky-950 text-sky-300 border border-sky-800/40 animate-pulse">
+                    Demo
+                  </span>
+                </h4>
+                <p className="text-slate-400 text-[11px] leading-relaxed">
+                  Real-time scrobbler is paused. Connect your accounts to start syncing.
+                </p>
+                <div className="pt-1">
+                  <button
+                    id="btn-banner-session-helper"
+                    onClick={handleSmartHelperClick}
+                    className="px-2.5 py-1 rounded bg-sky-600 hover:bg-sky-500 text-white font-bold text-[10px] tracking-wide uppercase transition-colors cursor-pointer"
+                  >
+                    Quick Setup
+                  </button>
+                </div>
+              </div>
+            </div>
+            
+            <button
+              onClick={dismissBanner}
+              className="text-slate-500 hover:text-slate-300 transition-colors p-1 -mr-1 -mt-1 cursor-pointer rounded hover:bg-slate-800"
+              title="Dismiss helper"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
       {/* Card 1: Currently Track / Last.fm Status */}
       <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-5 flex flex-col justify-between">
         <div>
@@ -104,57 +191,11 @@ export const StatusOverview: React.FC<StatusOverviewProps> = ({
         </div>
       </div>
 
-      {/* Card 2: Telegram Bio Preview */}
-      <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-5 flex flex-col justify-between">
-        <div>
-          <div className="flex items-center justify-between mb-3">
-            <span className="text-xs font-medium text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
-              <User className="w-3.5 h-3.5 text-sky-400" />
-              Telegram Bio Preview
-            </span>
-            <span
-              className={`text-[11px] font-mono px-2 py-0.5 rounded flex items-center gap-1 ${
-                isOverLimit
-                  ? 'bg-rose-950 text-rose-300 border border-rose-800'
-                  : 'bg-slate-800 text-slate-300'
-              }`}
-            >
-              {bioLength}/{status.bioMaxLen} chars
-            </span>
-          </div>
-
-          {/* Telegram Bio Box */}
-          <div className="p-3 rounded-lg bg-slate-950 border border-slate-800 text-sm font-sans text-slate-200 min-h-[58px] flex items-center break-words">
-            <span>{status.currentBio || <em className="text-slate-500">Bio is empty</em>}</span>
-          </div>
-
-          {/* Marker Status Indicator */}
-          <div className="mt-3 flex items-center gap-2">
-            {status.isBotManaged ? (
-              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-emerald-950 text-emerald-300 border border-emerald-800/50">
-                <CheckCircle2 className="w-3 h-3 text-emerald-400" />
-                Bot Managed (Marker \u200b present)
-              </span>
-            ) : (
-              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-amber-950 text-amber-300 border border-amber-800/50">
-                <AlertTriangle className="w-3 h-3 text-amber-400" />
-                Manual Edit (Marker absent)
-              </span>
-            )}
-          </div>
-        </div>
-
-        <div className="mt-4 pt-3 border-t border-slate-800/80 flex items-center justify-between text-xs text-slate-400">
-          <span>Zero-Width Protection</span>
-          <span className="font-mono text-emerald-400">Active</span>
-        </div>
-      </div>
-
       {/* Card 3: 24h Manual Override Status */}
       <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-5 flex flex-col justify-between">
         <div>
           <div className="flex items-center justify-between mb-3">
-            <span className="text-xs font-medium text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
+            <span className="text-xs font-semibold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
               <Shield className="w-3.5 h-3.5 text-indigo-400" />
               24-Hour Override
             </span>
@@ -185,7 +226,7 @@ export const StatusOverview: React.FC<StatusOverviewProps> = ({
                 <button
                   id="btn-fast-forward-24h"
                   onClick={() => onFastForward(25)}
-                  className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-lg bg-amber-500/10 text-amber-300 hover:bg-amber-500/20 border border-amber-500/30 transition-colors"
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-lg bg-amber-500/10 text-amber-300 hover:bg-amber-500/20 border border-amber-500/30 transition-colors cursor-pointer"
                 >
                   <FastForward className="w-3.5 h-3.5" />
                   Fast-Forward 24 Hours
@@ -211,7 +252,7 @@ export const StatusOverview: React.FC<StatusOverviewProps> = ({
           <button
             id="btn-reset-state"
             onClick={onResetState}
-            className="text-slate-400 hover:text-slate-200 inline-flex items-center gap-1 transition-colors"
+            className="text-slate-400 hover:text-slate-200 inline-flex items-center gap-1 transition-colors cursor-pointer"
           >
             <RotateCcw className="w-3 h-3" />
             Reset State

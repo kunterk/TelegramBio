@@ -28,6 +28,7 @@ export interface RunnerStatus {
   lastError: string | null;
   username: string;
   hasApiKey: boolean;
+  apiKey?: string;
   simulatedSong?: string | null;
   hasTelegramCredentials?: boolean;
   apiIdConfigured?: boolean;

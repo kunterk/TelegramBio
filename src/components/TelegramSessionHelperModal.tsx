@@ -43,8 +43,8 @@ export const TelegramSessionHelperModal: React.FC<TelegramSessionHelperModalProp
   onApplyCredentials,
   onSessionGenerated,
 }) => {
-  // Active tab: 'web-login' | 'script-generator' | 'guide'
-  const [activeTab, setActiveTab] = useState<'web-login' | 'script-generator' | 'guide'>('web-login');
+  // Active tab: 'web-login' | 'guide'
+  const [activeTab, setActiveTab] = useState<'web-login' | 'guide'>('web-login');
 
   // Input states
   const [apiId, setApiId] = useState(initialApiId || '');
@@ -54,27 +54,8 @@ export const TelegramSessionHelperModal: React.FC<TelegramSessionHelperModalProp
   const [password2FA, setPassword2FA] = useState('');
   const [manualSessionInput, setManualSessionInput] = useState(initialSessionString || '');
 
-  // UI view size and live typing tracking
+  // UI view size
   const [isMaximized, setIsMaximized] = useState(false);
-  const [activeTyping, setActiveTyping] = useState<{
-    id: string;
-    label: string;
-    value: string;
-    legit: boolean;
-  } | null>(null);
-
-  const handleFocusField = (
-    id: string,
-    label: string,
-    val: string,
-    legit: boolean,
-    e: React.FocusEvent<HTMLInputElement | HTMLTextAreaElement>
-  ) => {
-    setActiveTyping({ id, label, value: val, legit });
-    setTimeout(() => {
-      e.target.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    }, 100);
-  };
 
   // Sync initial props whenever modal opens or props change
   useEffect(() => {
@@ -105,30 +86,6 @@ export const TelegramSessionHelperModal: React.FC<TelegramSessionHelperModalProp
   // Copy tracking
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [appliedSuccess, setAppliedSuccess] = useState(false);
-
-  // Generated scripts
-  const [scripts, setScripts] = useState<TelegramGeneratedScripts | null>(null);
-
-  // Fetch scripts when apiId or apiHash changes and modal is open
-  useEffect(() => {
-    if (!isOpen) return;
-    fetch('/api/telegram/generate-scripts', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ targetApiId: apiId, targetApiHash: apiHash }),
-    })
-      .then((res) => {
-        const ct = res.headers.get('content-type') || '';
-        if (res.ok && ct.includes('application/json')) {
-          return res.json();
-        }
-        return null;
-      })
-      .then((data) => {
-        if (data) setScripts(data);
-      })
-      .catch(() => {});
-  }, [apiId, apiHash, isOpen]);
 
   const copyToClipboard = (text: string, key: string) => {
     navigator.clipboard.writeText(text);
@@ -281,35 +238,6 @@ export const TelegramSessionHelperModal: React.FC<TelegramSessionHelperModalProp
           </div>
         </div>
 
-        {/* Live Active Typing Peek Bar: Always visible above mobile keyboard */}
-        {activeTyping && (
-          <div className="sticky top-0 z-30 px-3 py-2 rounded-xl bg-sky-950/95 border border-sky-500/50 backdrop-blur-md shadow-xl flex items-center justify-between gap-2 text-xs animate-in fade-in slide-in-from-top-1 duration-150 shrink-0">
-            <div className="flex items-center gap-2 truncate min-w-0">
-              <span className="text-[10px] uppercase font-bold text-sky-400 bg-sky-900/80 px-1.5 py-0.5 rounded shrink-0">
-                {activeTyping.label}
-              </span>
-              <span className="font-mono text-white text-xs sm:text-sm font-semibold truncate select-all tracking-wide">
-                {activeTyping.value ? (
-                  activeTyping.value
-                ) : (
-                  <span className="text-slate-500 italic font-normal">Type here...</span>
-                )}
-              </span>
-            </div>
-            <div className="flex items-center gap-1.5 shrink-0">
-              {activeTyping.legit ? (
-                <span className="text-[10px] text-emerald-400 font-medium flex items-center gap-0.5 bg-emerald-950/60 px-1.5 py-0.5 rounded border border-emerald-500/30">
-                  <Check className="w-2.5 h-2.5" /> Seems legit 🫡
-                </span>
-              ) : (
-                <span className="text-[10px] text-sky-300 font-mono">
-                  {activeTyping.value.length > 0 ? `${activeTyping.value.length} chars` : 'Editing...'}
-                </span>
-              )}
-            </div>
-          </div>
-        )}
-
         {/* Navigation Tabs */}
         <div className="flex border-b border-slate-800 text-xs sm:text-sm font-medium gap-1 sm:gap-2 overflow-x-auto whitespace-nowrap shrink-0">
           <button
@@ -323,18 +251,6 @@ export const TelegramSessionHelperModal: React.FC<TelegramSessionHelperModalProp
           >
             <Smartphone className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
             <span>Direct Web Generator</span>
-          </button>
-          <button
-            id="tab-script-gen"
-            onClick={() => setActiveTab('script-generator')}
-            className={`pb-2.5 px-3 sm:px-4 border-b-2 flex items-center gap-1.5 sm:gap-2 transition-colors ${
-              activeTab === 'script-generator'
-                ? 'border-sky-500 text-sky-400 font-semibold'
-                : 'border-transparent text-slate-400 hover:text-slate-200'
-            }`}
-          >
-            <Terminal className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
-            <span>1-Click Script &amp; Terminal</span>
           </button>
           <button
             id="tab-guide"
@@ -358,10 +274,6 @@ export const TelegramSessionHelperModal: React.FC<TelegramSessionHelperModalProp
                 <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
                 <div className="space-y-1">
                   <p>{errorMsg}</p>
-                  <p className="text-slate-400 text-[11px]">
-                    Tip: You can also use the <strong>"1-Click Script &amp; Terminal"</strong> tab
-                    to generate your session string in seconds from your terminal.
-                  </p>
                 </div>
               </div>
             )}
@@ -387,21 +299,7 @@ export const TelegramSessionHelperModal: React.FC<TelegramSessionHelperModalProp
                       type="text"
                       placeholder="e.g. 24819284"
                       value={apiId}
-                      onFocus={(e) => handleFocusField('apiId', 'Telegram API_ID', apiId, isApiIdValid, e)}
-                      onChange={(e) => {
-                        setApiId(e.target.value);
-                        if (activeTyping?.id === 'apiId') {
-                          setActiveTyping((prev) =>
-                            prev
-                              ? {
-                                  ...prev,
-                                  value: e.target.value,
-                                  legit: Boolean(e.target.value && /^\d{5,12}$/.test(e.target.value.trim())),
-                                }
-                              : null
-                          );
-                        }
-                      }}
+                      onChange={(e) => setApiId(e.target.value)}
                       required
                       className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-slate-100 placeholder-slate-600 focus:outline-none focus:border-sky-500 font-mono text-xs sm:text-sm"
                     />
@@ -425,21 +323,7 @@ export const TelegramSessionHelperModal: React.FC<TelegramSessionHelperModalProp
                       type="text"
                       placeholder="e.g. d71c8430a91176b6..."
                       value={apiHash}
-                      onFocus={(e) => handleFocusField('apiHash', 'Telegram API_HASH', apiHash, isApiHashValid, e)}
-                      onChange={(e) => {
-                        setApiHash(e.target.value);
-                        if (activeTyping?.id === 'apiHash') {
-                          setActiveTyping((prev) =>
-                            prev
-                              ? {
-                                  ...prev,
-                                  value: e.target.value,
-                                  legit: Boolean(e.target.value && /^[a-fA-F0-9]{32}$/.test(e.target.value.trim())),
-                                }
-                              : null
-                          );
-                        }
-                      }}
+                      onChange={(e) => setApiHash(e.target.value)}
                       required
                       className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-slate-100 placeholder-slate-600 focus:outline-none focus:border-sky-500 font-mono text-xs sm:text-sm"
                     />
@@ -456,29 +340,7 @@ export const TelegramSessionHelperModal: React.FC<TelegramSessionHelperModalProp
                     type="tel"
                     placeholder="+60123456789"
                     value={phoneNumber}
-                    onFocus={(e) =>
-                      handleFocusField(
-                        'phoneNumber',
-                        'Phone Number',
-                        phoneNumber,
-                        /^\+\d{7,16}$/.test(phoneNumber.trim()),
-                        e
-                      )
-                    }
-                    onChange={(e) => {
-                      setPhoneNumber(e.target.value);
-                      if (activeTyping?.id === 'phoneNumber') {
-                        setActiveTyping((prev) =>
-                          prev
-                            ? {
-                                ...prev,
-                                value: e.target.value,
-                                legit: /^\+\d{7,16}$/.test(e.target.value.trim()),
-                              }
-                            : null
-                        );
-                      }
-                    }}
+                    onChange={(e) => setPhoneNumber(e.target.value)}
                     required
                     className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-slate-100 placeholder-slate-600 focus:outline-none focus:border-sky-500 font-mono text-xs sm:text-sm"
                   />
@@ -527,29 +389,7 @@ export const TelegramSessionHelperModal: React.FC<TelegramSessionHelperModalProp
                     type="text"
                     placeholder="Enter 5-digit code"
                     value={phoneCode}
-                    onFocus={(e) =>
-                      handleFocusField(
-                        'phoneCode',
-                        'Login Code',
-                        phoneCode,
-                        phoneCode.trim().length >= 5,
-                        e
-                      )
-                    }
-                    onChange={(e) => {
-                      setPhoneCode(e.target.value);
-                      if (activeTyping?.id === 'phoneCode') {
-                        setActiveTyping((prev) =>
-                          prev
-                            ? {
-                                ...prev,
-                                value: e.target.value,
-                                legit: e.target.value.trim().length >= 5,
-                              }
-                            : null
-                        );
-                      }
-                    }}
+                    onChange={(e) => setPhoneCode(e.target.value)}
                     required
                     autoFocus
                     className="w-full px-4 py-3 bg-slate-950 border border-slate-800 rounded-xl text-slate-100 text-lg font-mono tracking-widest text-center focus:outline-none focus:border-sky-500"
@@ -567,29 +407,7 @@ export const TelegramSessionHelperModal: React.FC<TelegramSessionHelperModalProp
                       type="password"
                       placeholder="Enter your Telegram 2FA cloud password"
                       value={password2FA}
-                      onFocus={(e) =>
-                        handleFocusField(
-                          'password2FA',
-                          '2FA Cloud Password',
-                          password2FA,
-                          password2FA.length > 0,
-                          e
-                        )
-                      }
-                      onChange={(e) => {
-                        setPassword2FA(e.target.value);
-                        if (activeTyping?.id === 'password2FA') {
-                          setActiveTyping((prev) =>
-                            prev
-                              ? {
-                                  ...prev,
-                                  value: e.target.value,
-                                  legit: e.target.value.length > 0,
-                                }
-                              : null
-                          );
-                        }
-                      }}
+                      onChange={(e) => setPassword2FA(e.target.value)}
                       required
                       className="w-full px-3.5 py-2.5 bg-slate-950 border border-amber-800/80 rounded-xl text-slate-100 focus:outline-none focus:border-amber-500 font-mono text-xs sm:text-sm"
                     />
@@ -699,168 +517,13 @@ export const TelegramSessionHelperModal: React.FC<TelegramSessionHelperModalProp
                       Use in Settings &amp; Return
                     </button>
                   )}
-                  <button
-                    id="btn-apply-generated-session"
-                    type="button"
-                    onClick={() => handleApply()}
-                    className="px-4 py-2 rounded-lg bg-sky-600 hover:bg-sky-500 text-white font-medium text-xs flex items-center gap-1.5 shadow-lg shadow-sky-900/30 cursor-pointer"
-                  >
-                    {appliedSuccess ? (
-                      <>
-                        <Check className="w-4 h-4 text-emerald-300" />
-                        Applied to Bot!
-                      </>
-                    ) : (
-                      <>
-                        <Sparkles className="w-4 h-4 text-sky-200" />
-                        Apply to Bot Configuration
-                      </>
-                    )}
-                  </button>
                 </div>
               </div>
             )}
           </div>
         )}
 
-        {/* Tab 2: 1-Click Script & Command Generator */}
-        {activeTab === 'script-generator' && (
-          <div className="space-y-4 overflow-y-auto flex-1 pr-1 text-xs">
-            <div className="p-3 rounded-lg bg-slate-950 border border-slate-800 space-y-2">
-              <span className="font-semibold text-slate-200">
-                Generate in your local terminal or Google Colab / Replit:
-              </span>
-              <p className="text-slate-400 leading-relaxed">
-                If you prefer to generate your session string offline, run one of these pre-filled commands.
-                It will prompt for your phone number and login code in your terminal, then output your session string.
-              </p>
-            </div>
 
-            {/* Script selector */}
-            <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <span className="font-medium text-slate-300 flex items-center gap-1.5 font-mono text-[11px]">
-                  <Terminal className="w-3.5 h-3.5 text-sky-400" />
-                  Python Pyrogram Standalone Script (session_gen.py)
-                </span>
-                <button
-                  type="button"
-                  onClick={() => copyToClipboard(scripts?.pythonScript || '', 'py-script')}
-                  className="text-sky-400 hover:text-sky-300 inline-flex items-center gap-1 font-mono text-[11px]"
-                >
-                  {copiedKey === 'py-script' ? (
-                    <>
-                      <Check className="w-3 h-3 text-emerald-400" />
-                      Copied!
-                    </>
-                  ) : (
-                    <>
-                      <Copy className="w-3 h-3" />
-                      Copy Script
-                    </>
-                  )}
-                </button>
-              </div>
-              <pre className="p-3 rounded-lg bg-slate-950 border border-slate-800 font-mono text-[11px] text-slate-200 overflow-x-auto max-h-44">
-                {scripts?.pythonScript}
-              </pre>
-            </div>
-
-            {/* One-Liner */}
-            <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <span className="font-medium text-slate-300 flex items-center gap-1.5 font-mono text-[11px]">
-                  <Terminal className="w-3.5 h-3.5 text-emerald-400" />
-                  One-Liner Bash Command
-                </span>
-                <button
-                  type="button"
-                  onClick={() => copyToClipboard(scripts?.pythonOneLiner || '', 'py-oneliner')}
-                  className="text-sky-400 hover:text-sky-300 inline-flex items-center gap-1 font-mono text-[11px]"
-                >
-                  {copiedKey === 'py-oneliner' ? (
-                    <>
-                      <Check className="w-3 h-3 text-emerald-400" />
-                      Copied!
-                    </>
-                  ) : (
-                    <>
-                      <Copy className="w-3 h-3" />
-                      Copy One-Liner
-                    </>
-                  )}
-                </button>
-              </div>
-              <pre className="p-3 rounded-lg bg-slate-950 border border-slate-800 font-mono text-[11px] text-emerald-300 overflow-x-auto whitespace-pre-wrap break-all">
-                {scripts?.pythonOneLiner}
-              </pre>
-            </div>
-
-            {/* Paste Session string to apply */}
-            <div className="pt-2 border-t border-slate-800 space-y-2">
-              <label className="font-medium text-slate-200 block">
-                Have your generated SESSION_STRING? Paste it here to apply:
-              </label>
-              <div className="flex flex-wrap gap-2">
-                <input
-                  id="input-manual-session"
-                  type="text"
-                  placeholder="Paste SESSION_STRING here..."
-                  value={manualSessionInput}
-                  onFocus={(e) =>
-                    handleFocusField(
-                      'manualSessionInput',
-                      'Manual Session String',
-                      manualSessionInput,
-                      manualSessionInput.trim().length >= 40,
-                      e
-                    )
-                  }
-                  onChange={(e) => {
-                    setManualSessionInput(e.target.value);
-                    if (activeTyping?.id === 'manualSessionInput') {
-                      setActiveTyping((prev) =>
-                        prev
-                          ? {
-                              ...prev,
-                              value: e.target.value,
-                              legit: e.target.value.trim().length >= 40,
-                            }
-                          : null
-                      );
-                    }
-                  }}
-                  className="flex-1 min-w-[200px] px-3 py-2 bg-slate-950 border border-slate-800 rounded-lg text-slate-100 font-mono text-xs focus:outline-none focus:border-sky-500"
-                />
-                {openedFromConfig && (
-                  <button
-                    id="btn-use-manual-in-settings"
-                    type="button"
-                    onClick={() => {
-                      if (onSessionGenerated) {
-                        onSessionGenerated(manualSessionInput, apiId, apiHash);
-                      }
-                      onClose();
-                    }}
-                    disabled={!manualSessionInput.trim()}
-                    className="px-3.5 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-medium text-xs disabled:opacity-50 transition-colors shrink-0 cursor-pointer"
-                  >
-                    Use in Settings &amp; Return
-                  </button>
-                )}
-                <button
-                  id="btn-apply-manual-session"
-                  type="button"
-                  onClick={() => handleApply(manualSessionInput)}
-                  disabled={!manualSessionInput}
-                  className="px-4 py-2 rounded-lg bg-sky-600 hover:bg-sky-500 text-white font-medium text-xs disabled:opacity-50 transition-colors shrink-0 cursor-pointer"
-                >
-                  {appliedSuccess ? 'Applied!' : 'Apply to Bot'}
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
 
         {/* Tab 3: Step-by-Step Guide to get API_ID & API_HASH */}
         {activeTab === 'guide' && (
@@ -944,26 +607,6 @@ export const TelegramSessionHelperModal: React.FC<TelegramSessionHelperModalProp
         {/* Footer */}
         <div className="border-t border-slate-800 pt-3 flex items-center justify-between text-xs text-slate-500">
           <span>Official MTProto Protocol &bull; Pyrogram &bull; GramJS</span>
-          <div className="flex items-center gap-2">
-            {openedFromConfig ? (
-              <button
-                id="btn-return-to-settings-bottom"
-                type="button"
-                onClick={onClose}
-                className="px-3.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white font-medium transition-colors cursor-pointer"
-              >
-                &larr; Return to Settings
-              </button>
-            ) : (
-              <button
-                type="button"
-                onClick={onClose}
-                className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 transition-colors"
-              >
-                Close
-              </button>
-            )}
-          </div>
         </div>
       </div>
     </div>

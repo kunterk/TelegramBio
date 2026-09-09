@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   X,
   Settings,
@@ -46,6 +46,8 @@ export interface ConfigModalProps {
   }) => void;
   draft: ConfigDraft;
   onDraftChange: React.Dispatch<React.SetStateAction<ConfigDraft>>;
+  showLogs: boolean;
+  onShowLogsChange: (show: boolean) => void;
 }
 
 export const ConfigModal: React.FC<ConfigModalProps> = ({
@@ -56,6 +58,8 @@ export const ConfigModal: React.FC<ConfigModalProps> = ({
   onSaveConfig,
   draft,
   onDraftChange,
+  showLogs,
+  onShowLogsChange,
 }) => {
   const {
     pollInterval,
@@ -77,6 +81,79 @@ export const ConfigModal: React.FC<ConfigModalProps> = ({
 
   const [savedSuccess, setSavedSuccess] = useState(false);
   const [isMaximized, setIsMaximized] = useState(false);
+  const [localShowLogs, setLocalShowLogs] = useState(showLogs);
+  const [showTooltip, setShowTooltip] = useState(false);
+
+  useEffect(() => {
+    const handleMessage = (event: MessageEvent) => {
+      if (event.data && event.data.type === 'lastfm-auth-success') {
+        const { username: grabbedUsername, apiKey: grabbedKey } = event.data;
+        if (grabbedUsername) {
+          setUsername(grabbedUsername);
+        }
+        if (grabbedKey) {
+          setApiKey(grabbedKey);
+        }
+        setLastfmVerified(true);
+        setLastfmTestResult({
+          success: true,
+          message: `Connected successfully! Auto-grabbed @${grabbedUsername}`,
+        });
+      }
+    };
+
+    window.addEventListener('message', handleMessage);
+
+    const interval = setInterval(() => {
+      const saved = localStorage.getItem('lastfm_autograd');
+      if (saved) {
+        try {
+          const parsed = JSON.parse(saved);
+          if (parsed && Date.now() - parsed.timestamp < 60000) {
+            if (parsed.username) {
+              setUsername(parsed.username);
+            }
+            if (parsed.apiKey) {
+              setApiKey(parsed.apiKey);
+            }
+            setLastfmVerified(true);
+            setLastfmTestResult({
+              success: true,
+              message: `Connected successfully! Auto-grabbed @${parsed.username}`,
+            });
+            localStorage.removeItem('lastfm_autograd');
+          }
+        } catch (e) {
+          // ignore
+        }
+      }
+    }, 1500);
+
+    return () => {
+      window.removeEventListener('message', handleMessage);
+      clearInterval(interval);
+    };
+  }, [apiKey, setUsername, setApiKey]);
+
+  const handleAutograb = () => {
+    if (!apiKey.trim()) {
+      alert('Please fill in your Last.fm API Key first to trigger the autograb login!');
+      return;
+    }
+    const cbUrl = encodeURIComponent(`${window.location.origin}/api/lastfm-callback?apiKey=${apiKey.trim()}`);
+    const authUrl = `https://www.last.fm/api/auth/?api_key=${apiKey.trim()}&cb=${cbUrl}`;
+
+    const width = 600;
+    const height = 700;
+    const left = window.screen.width / 2 - width / 2;
+    const top = window.screen.height / 2 - height / 2;
+
+    window.open(
+      authUrl,
+      'LastFM_Auth',
+      `width=${width},height=${height},left=${left},top=${top},status=0,menubar=0,toolbar=0,location=0`
+    );
+  };
 
   // Test Connection States & Verification (Start with red color, change to green when verified)
   const [lastfmTesting, setLastfmTesting] = useState(false);
@@ -116,8 +193,6 @@ export const ConfigModal: React.FC<ConfigModalProps> = ({
     isApiHashFormatValid(apiHash) ||
     isSessionStringFormatValid(sessionString) ||
     isUsernameLegit(username);
-
-  const dynamicButtonText = hasLegitField ? 'Help me with the rest 🥹' : 'Generate All 🫣';
 
   // Multi-Section Setup Assistant Engine: Helps with BOTH Last.fm and Telegram
   const getSetupStatus = () => {
@@ -164,26 +239,41 @@ export const ConfigModal: React.FC<ConfigModalProps> = ({
         badge: 'Step 4: Session String',
       };
     }
+    
+    const isAllVerified = lastfmVerified && telegramVerified;
     return {
       stage: 'all-set',
       title: 'All Credentials Completed & Valid',
-      subtitle: 'All fields seem legit 🫡! Test connections & save configuration',
-      actionLabel: 'Verify & Test Connections',
+      subtitle: isAllVerified ? 'All fields are working perfectly! Save configuration' : 'All fields seem legit 🫡! Test connections & save configuration',
+      actionLabel: isAllVerified ? 'Save configuration to bot config' : 'Verify & Test Connections',
       isUrl: false,
       badge: 'All Credentials Ready 🚀',
     };
   };
 
   const setupGuide = getSetupStatus();
+  const isAllVerified = setupGuide.stage === 'all-set' && lastfmVerified && telegramVerified;
+
+  const dynamicButtonText = isAllVerified
+    ? 'Save to bot config for future use'
+    : setupGuide.stage === 'all-set'
+      ? 'Verify & Test Connections'
+      : hasLegitField
+        ? 'Help me with the rest 🥹'
+        : 'Generate All 🫣';
 
   const handleSmartHelperClick = () => {
-    if (setupGuide.isUrl && setupGuide.actionUrl) {
+    if (setupGuide.stage === 'all-set') {
+      if (lastfmVerified && telegramVerified) {
+        document.getElementById('btn-save-config')?.click();
+      } else {
+        handleTestLastfm();
+        handleTestTelegram();
+      }
+    } else if (setupGuide.isUrl && setupGuide.actionUrl) {
       window.open(setupGuide.actionUrl, '_blank', 'noopener,noreferrer');
     } else if (setupGuide.stage === 'telegram-session') {
       handleGeneratorClick();
-    } else if (setupGuide.stage === 'all-set') {
-      handleTestLastfm();
-      handleTestTelegram();
     }
   };
 
@@ -296,6 +386,7 @@ export const ConfigModal: React.FC<ConfigModalProps> = ({
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    onShowLogsChange(localShowLogs);
     onSaveConfig({
       newPollInterval: Number(pollInterval),
       newBioMaxLen: Number(bioMaxLen),
@@ -408,14 +499,26 @@ export const ConfigModal: React.FC<ConfigModalProps> = ({
                   )}
                 </div>
               </div>
-              <input
-                id="input-cfg-username"
-                type="text"
-                placeholder="Last.fm ID / Username"
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                className="w-full px-3.5 py-2.5 bg-slate-950/80 border border-slate-800 rounded-xl text-slate-100 placeholder-slate-600 focus:outline-none focus:border-sky-500 font-mono text-xs transition-colors"
-              />
+              <div className="flex gap-2">
+                <input
+                  id="input-cfg-username"
+                  type="text"
+                  placeholder="Last.fm ID / Username"
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                  className="flex-1 px-3.5 py-2.5 bg-slate-950/80 border border-slate-800 rounded-xl text-slate-100 placeholder-slate-600 focus:outline-none focus:border-sky-500 font-mono text-xs transition-colors"
+                />
+                <button
+                  type="button"
+                  onClick={handleAutograb}
+                  disabled={!apiKey.trim()}
+                  className="px-3.5 py-2.5 rounded-xl bg-gradient-to-r from-sky-600 to-indigo-600 hover:from-sky-500 hover:to-indigo-500 text-white text-xs font-bold transition-all shrink-0 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer flex items-center gap-1.5"
+                  title={!apiKey.trim() ? "Please fill Last.fm API Key first to use Autograb" : "Login & autograb username automatically"}
+                >
+                  <Sparkles className="w-3.5 h-3.5" />
+                  <span>Autograb</span>
+                </button>
+              </div>
             </div>
 
             {/* Input: Last.fm API Key */}
@@ -578,13 +681,7 @@ export const ConfigModal: React.FC<ConfigModalProps> = ({
                 type="text"
                 placeholder="Enter Telegram App API ID"
                 value={apiId}
-                onFocus={(e) => handleFocusField('apiId', 'Telegram API ID', apiId, isApiIdFormatValid(apiId), e)}
-                onChange={(e) => {
-                  setApiId(e.target.value);
-                  if (activeTyping?.field === 'apiId') {
-                    setActiveTyping((prev) => prev ? { ...prev, value: e.target.value, legit: isApiIdFormatValid(e.target.value) } : null);
-                  }
-                }}
+                onChange={(e) => setApiId(e.target.value)}
                 className={`w-full px-3.5 py-2.5 bg-slate-950/80 border rounded-xl text-slate-100 placeholder-slate-600 focus:outline-none font-mono text-xs transition-colors ${
                   apiId.trim()
                     ? isApiIdFormatValid(apiId)
@@ -620,13 +717,7 @@ export const ConfigModal: React.FC<ConfigModalProps> = ({
                 type="text"
                 placeholder="Enter Telegram App API Hash (32 characters)"
                 value={apiHash}
-                onFocus={(e) => handleFocusField('apiHash', 'Telegram API Hash', apiHash, isApiHashFormatValid(apiHash), e)}
-                onChange={(e) => {
-                  setApiHash(e.target.value);
-                  if (activeTyping?.field === 'apiHash') {
-                    setActiveTyping((prev) => prev ? { ...prev, value: e.target.value, legit: isApiHashFormatValid(e.target.value) } : null);
-                  }
-                }}
+                onChange={(e) => setApiHash(e.target.value)}
                 className={`w-full px-3.5 py-2.5 bg-slate-950/80 border rounded-xl text-slate-100 placeholder-slate-600 focus:outline-none font-mono text-xs transition-colors ${
                   apiHash.trim()
                     ? isApiHashFormatValid(apiHash)
@@ -673,13 +764,7 @@ export const ConfigModal: React.FC<ConfigModalProps> = ({
                 rows={2}
                 placeholder="Paste Pyrogram / Telethon string session here"
                 value={sessionString}
-                onFocus={(e) => handleFocusField('sessionString', 'Telegram Session String', sessionString, isSessionStringFormatValid(sessionString), e)}
-                onChange={(e) => {
-                  setSessionString(e.target.value);
-                  if (activeTyping?.field === 'sessionString') {
-                    setActiveTyping((prev) => prev ? { ...prev, value: e.target.value, legit: isSessionStringFormatValid(e.target.value) } : null);
-                  }
-                }}
+                onChange={(e) => setSessionString(e.target.value)}
                 className={`w-full px-3.5 py-2.5 bg-slate-950/80 border rounded-xl text-slate-100 placeholder-slate-600 focus:outline-none font-mono text-xs transition-colors resize-none ${
                   sessionString.trim()
                     ? isSessionStringFormatValid(sessionString)
@@ -694,7 +779,7 @@ export const ConfigModal: React.FC<ConfigModalProps> = ({
             <div className="pt-2 flex flex-col gap-2">
               <div className="flex items-center justify-between gap-3">
                 <span className="text-[11px] text-slate-400">
-                  Verify Telegram MTProto authorization &amp; session key
+                  Verify Telegram Connection
                 </span>
                 <button
                   id="btn-test-telegram"
@@ -741,94 +826,55 @@ export const ConfigModal: React.FC<ConfigModalProps> = ({
             </div>
           </div>
 
-          {/* 3. Global Setup Assistant / Generator Button (MOVED OUTSIDE TELEGRAM SECTION) */}
-          <div className="p-3.5 sm:p-4 rounded-2xl bg-gradient-to-b from-sky-950/40 via-slate-900 to-indigo-950/30 border border-sky-500/30 shadow-lg space-y-3">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-1.5 text-xs font-semibold text-sky-300">
-                <Sparkles className="w-4 h-4 text-sky-400" />
-                <span>Credentials Setup Assistant</span>
-              </div>
-              <span className="px-2 py-0.5 rounded-md bg-sky-900/60 border border-sky-400/30 text-[10px] font-mono text-sky-200">
-                {setupGuide.badge}
-              </span>
-            </div>
-
-            <p className="text-[11px] text-slate-300 leading-relaxed">
-              {setupGuide.subtitle}
-            </p>
-
-            {/* Main Interactive Helper Button: Helps with BOTH sections */}
-            <button
-              id="btn-dynamic-generator"
-              type="button"
-              onClick={handleSmartHelperClick}
-              className="w-full py-3 px-4 rounded-xl bg-gradient-to-r from-sky-600 via-indigo-600 to-sky-600 hover:from-sky-500 hover:via-indigo-500 hover:to-sky-500 text-white font-semibold text-xs sm:text-sm shadow-lg shadow-sky-950/50 flex items-center justify-center gap-2 border border-sky-400/25 transition-all duration-300 hover:scale-[1.008] active:scale-[0.99] cursor-pointer"
-            >
-              <Sparkles className="w-4 h-4 text-sky-200 shrink-0" />
-              <AnimatePresence mode="wait" initial={false}>
-                <motion.span
-                  key={dynamicButtonText + setupGuide.stage}
-                  initial={{ opacity: 0, y: -4 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: 4 }}
-                  transition={{ duration: 0.22, ease: 'easeOut' }}
-                  className="font-medium truncate"
-                >
-                  {dynamicButtonText} &mdash; {setupGuide.actionLabel}
-                </motion.span>
+          {/* 3. Generator Button */}
+          <div className="pt-2">
+            <div className="relative w-full">
+              <button
+                id="btn-dynamic-generator"
+                type="button"
+                onClick={handleSmartHelperClick}
+                onMouseEnter={() => setShowTooltip(true)}
+                onMouseLeave={() => setShowTooltip(false)}
+                onFocus={() => setShowTooltip(true)}
+                onBlur={() => setShowTooltip(false)}
+                className="w-full py-3 px-4 rounded-xl bg-gradient-to-r from-sky-600 via-indigo-600 to-sky-600 hover:from-sky-500 hover:via-indigo-500 hover:to-sky-500 text-white font-semibold text-xs sm:text-sm shadow-lg shadow-sky-950/50 flex items-center justify-center gap-2 border border-sky-400/25 transition-all duration-300 hover:scale-[1.005] active:scale-[0.99] cursor-pointer"
+              >
+                <Sparkles className="w-4 h-4 text-sky-200 shrink-0" />
+                <AnimatePresence mode="wait" initial={false}>
+                  <motion.span
+                    key={dynamicButtonText + setupGuide.stage}
+                    initial={{ opacity: 0, y: -4 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: 4 }}
+                    transition={{ duration: 0.22, ease: 'easeOut' }}
+                    className="font-medium truncate"
+                  >
+                    {dynamicButtonText}
+                  </motion.span>
+                </AnimatePresence>
+              </button>
+              <AnimatePresence>
+                {showTooltip && (
+                  <motion.div
+                    initial={{ opacity: 0, y: 4, scale: 0.95 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    exit={{ opacity: 0, y: 4, scale: 0.95 }}
+                    transition={{ duration: 0.15, ease: 'easeOut' }}
+                    className="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 px-3 py-2 bg-slate-950 border border-slate-800 text-slate-200 text-[11px] font-medium rounded-xl shadow-xl z-50 pointer-events-none flex items-center gap-1.5 whitespace-nowrap"
+                  >
+                    <span>{setupGuide.actionLabel}</span>
+                    {setupGuide.isUrl && <ExternalLink className="w-3.5 h-3.5 text-sky-400" />}
+                    <div className="absolute top-full left-1/2 -translate-x-1/2 -mt-1 border-4 border-transparent border-t-slate-950" />
+                    <div className="absolute top-full left-1/2 -translate-x-1/2 -mt-[5px] border-4 border-transparent border-t-slate-800 -z-10" />
+                  </motion.div>
+                )}
               </AnimatePresence>
-            </button>
-
-            {/* Quick helper portal links for both Last.fm and Telegram */}
-            <div className="flex flex-wrap items-center gap-2 pt-1 border-t border-slate-800/80">
-              <a
-                href="https://www.last.fm/join"
-                target="_blank"
-                rel="noreferrer"
-                className="text-[10px] text-slate-400 hover:text-slate-200 hover:underline inline-flex items-center gap-1 font-medium transition-colors"
-              >
-                Last.fm Register <ExternalLink className="w-2.5 h-2.5" />
-              </a>
-              <span className="text-slate-700">&bull;</span>
-              <a
-                href="https://www.last.fm/api/account/create"
-                target="_blank"
-                rel="noreferrer"
-                className="text-[10px] text-slate-400 hover:text-slate-200 hover:underline inline-flex items-center gap-1 font-medium transition-colors"
-              >
-                Create API Key <ExternalLink className="w-2.5 h-2.5" />
-              </a>
-              <span className="text-slate-700">&bull;</span>
-              <a
-                href="https://www.last.fm/api/accounts"
-                target="_blank"
-                rel="noreferrer"
-                className="text-[10px] text-rose-400 hover:text-rose-300 hover:underline inline-flex items-center gap-1 font-medium transition-colors"
-              >
-                API Applications <ExternalLink className="w-2.5 h-2.5" />
-              </a>
-              <span className="text-slate-700">&bull;</span>
-              <a
-                href="https://my.telegram.org/apps"
-                target="_blank"
-                rel="noreferrer"
-                className="text-[10px] text-sky-400 hover:text-sky-300 hover:underline inline-flex items-center gap-1 font-medium transition-colors"
-              >
-                Telegram Apps <ExternalLink className="w-2.5 h-2.5" />
-              </a>
             </div>
           </div>
 
           {/* 4. General Settings Section */}
           <div className="pt-3 border-t border-slate-800/80 space-y-3">
             <div className="flex items-center gap-2 text-slate-300 font-semibold tracking-wide uppercase text-[11px]">
-              <span
-                className={`w-2 h-2 rounded-full transition-all duration-300 ${
-                  runnerVerified
-                    ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.8)]'
-                    : 'bg-rose-500 shadow-[0_0_8px_rgba(244,63,94,0.6)]'
-                }`}
-              />
               <span>General Settings</span>
             </div>
 
@@ -868,54 +914,28 @@ export const ConfigModal: React.FC<ConfigModalProps> = ({
               </div>
             </div>
 
-            {/* Bottom of General Settings: Test Connection */}
-            <div className="pt-2 flex flex-col gap-2">
-              <div className="flex items-center justify-between gap-3">
-                <span className="text-[11px] text-slate-400">
-                  Verify background scrobbler runner loop responsiveness
+            {/* Show Logs Toggle Switch */}
+            <div className="flex items-center justify-between p-3.5 rounded-xl bg-slate-950/50 border border-slate-800/80">
+              <div className="space-y-0.5">
+                <span className="font-medium text-slate-200 block text-xs">Show Logs</span>
+                <span className="text-[11px] text-slate-500 block">
+                  Enable background logs console &amp; decision flow route visualizer
                 </span>
-                <button
-                  id="btn-test-runner"
-                  type="button"
-                  onClick={handleTestRunner}
-                  disabled={runnerTesting}
-                  className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white border border-slate-700 text-[11px] font-medium flex items-center gap-1.5 transition-colors disabled:opacity-50 cursor-pointer shrink-0"
-                >
-                  {runnerTesting ? (
-                    <>
-                      <Loader2 className="w-3.5 h-3.5 animate-spin text-slate-400" />
-                      <span>Testing...</span>
-                    </>
-                  ) : (
-                    <>
-                      <Wifi
-                        className={`w-3.5 h-3.5 transition-colors duration-300 ${
-                          runnerVerified ? 'text-emerald-400' : 'text-rose-500'
-                        }`}
-                      />
-                      <span>Test Connection</span>
-                    </>
-                  )}
-                </button>
               </div>
-
-              {/* General Settings Runner Feedback */}
-              {runnerTestResult && (
+              <button
+                id="btn-toggle-show-logs"
+                type="button"
+                onClick={() => setLocalShowLogs(!localShowLogs)}
+                className={`w-11 h-6 rounded-full p-0.5 transition-colors duration-200 focus:outline-none ${
+                  localShowLogs ? 'bg-sky-600' : 'bg-slate-800'
+                }`}
+              >
                 <div
-                  className={`p-2.5 rounded-xl text-[11px] flex items-start gap-2 border transition-all ${
-                    runnerTestResult.success
-                      ? 'bg-emerald-950/40 border-emerald-500/30 text-emerald-300'
-                      : 'bg-rose-950/40 border-rose-500/30 text-rose-300'
+                  className={`bg-white w-5 h-5 rounded-full shadow-md transform transition-transform duration-200 ${
+                    localShowLogs ? 'translate-x-5' : 'translate-x-0'
                   }`}
-                >
-                  {runnerTestResult.success ? (
-                    <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
-                  ) : (
-                    <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
-                  )}
-                  <span className="leading-tight">{runnerTestResult.message}</span>
-                </div>
-              )}
+                />
+              </button>
             </div>
           </div>
 

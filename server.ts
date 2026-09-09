@@ -5,17 +5,50 @@ import dotenv from 'dotenv';
 import { createServer as createViteServer } from 'vite';
 import { Api, TelegramClient } from 'telegram';
 import { StringSession } from 'telegram/sessions';
+import { GoogleGenAI } from '@google/genai';
 
 dotenv.config();
 
 const PORT = 3000;
 const STATE_FILE = 'bot_state.json';
 const INVISIBLE_MARKER = '\u200b'; // Zero-width space marker for bot-edited bios
-const EXPIRATION_SECONDS = 24 * 3600; // 24 hours
+let expirationSeconds = 24 * 3600; // default 24 hours
+
+const FALLBACK_BIOS = [
+  'Tengah coding tapi otak dah hang. 🧠💻',
+  'Busy sikit, call if urgent. Melainkan nak ajak mamak. ☕',
+  'Work hard, play music harder. Currently vibing.',
+  'Sedang mencari ketenangan dalam baris-baris kod. 🍃',
+  'Life is too short to listen to bad music. 🎧',
+  'Coffee in, bugs out. Rojak lifestyle. ☕🔥',
+  'Focusing... No distractions please (unless it is food). 🍕',
+  'Ada je dekat sini, tengah scroll playlist.',
+  'On vacation. Virtual vacation je tapi. 🌴',
+  'Stuck in a loop of good songs and broken code.'
+];
+
+let aiClient: any = null;
+function getGeminiClient() {
+  if (!aiClient) {
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (apiKey) {
+      aiClient = new GoogleGenAI({
+        apiKey,
+        httpOptions: {
+          headers: {
+            'User-Agent': 'aistudio-build',
+          }
+        }
+      });
+    }
+  }
+  return aiClient;
+}
 
 interface BotState {
   last_song: string;
   manual_timestamp: number;
+  expiration_seconds?: number;
 }
 
 interface LogEntry {
@@ -26,10 +59,11 @@ interface LogEntry {
 }
 
 // Global state
-let botRunning = true;
+let botRunning = false;
 let pollInterval = parseInt(process.env.POLL_INTERVAL || '30', 10);
 let bioMaxLen = parseInt(process.env.BIO_MAX_LEN || '140', 10);
 let lastfmApiKey = process.env.LASTFM_API_KEY || '';
+let lastfmApiSecret = process.env.LASTFM_API_SECRET || 'b45e829f3942337cdfcb63e9431574f0';
 let lastfmUsername = process.env.LASTFM_USERNAME || '';
 let apiId = process.env.API_ID || '';
 let apiHash = process.env.API_HASH || '';
@@ -110,19 +144,24 @@ function loadState(): BotState {
   if (fs.existsSync(STATE_FILE)) {
     try {
       const data = fs.readFileSync(STATE_FILE, 'utf-8');
-      return JSON.parse(data);
+      const parsed = JSON.parse(data);
+      if (typeof parsed.expiration_seconds === 'number') {
+        expirationSeconds = parsed.expiration_seconds;
+      }
+      return parsed;
     } catch (e) {
       addLog('WARNING', `Gagal membaca ${STATE_FILE}. Menggunakan state default.`);
     }
   }
-  return { last_song: '', manual_timestamp: 0 };
+  return { last_song: '', manual_timestamp: 0, expiration_seconds: 24 * 3600 };
 }
 
-function saveState(lastSong: string, manualTimestamp: number) {
+function saveState(lastSong: string, manualTimestamp: number, customExpirationSeconds?: number) {
   try {
+    const expSecs = typeof customExpirationSeconds === 'number' ? customExpirationSeconds : expirationSeconds;
     fs.writeFileSync(
       STATE_FILE,
-      JSON.stringify({ last_song: lastSong, manual_timestamp: manualTimestamp }, null, 2)
+      JSON.stringify({ last_song: lastSong, manual_timestamp: manualTimestamp, expiration_seconds: expSecs }, null, 2)
     );
   } catch (e) {
     addLog('ERROR', `Gagal menyimpan state ke ${STATE_FILE}: ${e}`);
@@ -222,16 +261,16 @@ async function runScrobbleCycle() {
     const state = loadState();
     const currentTime = Date.now() / 1000;
 
-    // OPTION 3: Skip Telegram API if song & bot status haven't changed
-    if (songStatus === state.last_song && state.manual_timestamp === 0) {
+    const isEmpty = currentTelegramBio === '';
+    const isUpdatedByBot = currentTelegramBio.endsWith(INVISIBLE_MARKER);
+
+    // OPTION 3: Skip Telegram API if song & bot status haven't changed AND bio is still bot-managed
+    if (songStatus === state.last_song && state.manual_timestamp === 0 && (isEmpty || isUpdatedByBot)) {
       addLog('INFO', '🎵 Lagu masih sama dalam rekod tempatan. Memotong panggilan API Telegram.');
       consecutiveFailures = 0;
       backoff = 5;
       return;
     }
-
-    const isEmpty = currentTelegramBio === '';
-    const isUpdatedByBot = currentTelegramBio.endsWith(INVISIBLE_MARKER);
 
     // OPTION 1: Check if bio is EMPTY or UPDATED BY BOT
     if (isEmpty || isUpdatedByBot) {
@@ -248,24 +287,43 @@ async function runScrobbleCycle() {
       backoff = 5;
     } else {
       // BIO MANUAL DETECTED (no marker & not empty)
-      if (state.manual_timestamp === 0) {
+      if (state.manual_timestamp === -1) {
+        addLog(
+          'INFO',
+          '👤 Sekatan Kekal (Permanent Override) aktif. Bot tidak mengganggu.'
+        );
+      } else if (state.manual_timestamp === 0) {
         saveState(songStatus, currentTime);
-        addLog('INFO', '👤 Bio manual dikesan. Tempoh 24 jam bermula.');
+        const expSecs = state.expiration_seconds || expirationSeconds;
+        const minutes = Math.round(expSecs / 60);
+        const hours = (expSecs / 3600).toFixed(1);
+        const displayTime = expSecs < 3600 ? `${minutes} minit` : `${hours} jam`;
+        addLog('INFO', `👤 Bio manual dikesan. Tempoh ${displayTime} bermula.`);
       } else {
         const timeElapsed = currentTime - state.manual_timestamp;
+        const expSecs = state.expiration_seconds || expirationSeconds;
 
-        if (timeElapsed > EXPIRATION_SECONDS) {
-          // 24-hour timeout expired! Bot takes over
+        if (timeElapsed > expSecs) {
+          // timeout expired! Bot takes over
           const truncatedSong = safeTruncate(songStatus, bioMaxLen - 1);
           const newBio = truncatedSong + INVISIBLE_MARKER;
           currentTelegramBio = newBio;
           saveState(songStatus, 0);
-          addLog('INFO', `⏰ Bio manual melebihi 24 jam. Bot mengambil alih -> ${newBio}`);
+          const minutes = Math.round(expSecs / 60);
+          const hours = (expSecs / 3600).toFixed(1);
+          const displayTime = expSecs < 3600 ? `${minutes} minit` : `${hours} jam`;
+          addLog('INFO', `⏰ Bio manual melebihi ${displayTime}. Bot mengambil alih -> ${newBio}`);
         } else {
-          const hoursLeft = ((EXPIRATION_SECONDS - timeElapsed) / 3600).toFixed(1);
+          const timeLeft = expSecs - timeElapsed;
+          let displayRemaining = '';
+          if (timeLeft < 3600) {
+            displayRemaining = `${Math.round(timeLeft / 60)} minit`;
+          } else {
+            displayRemaining = `${(timeLeft / 3600).toFixed(1)} jam`;
+          }
           addLog(
             'INFO',
-            `👤 Bio manual masih aktif (Baki masa: ${hoursLeft} jam). Bot tidak mengganggu.`
+            `👤 Bio manual masih aktif (Baki masa: ${displayRemaining}). Bot tidak mengganggu.`
           );
         }
       }
@@ -301,6 +359,7 @@ function startPolling() {
 
 // Initial setup logs
 addLog('INFO', 'Pyrogram client dimulakan.');
+addLog('WARNING', 'Sistem dimulakan dalam keadaan dijeda (Paused) secara lalai. Sila klik "Resume" untuk memulakan scrobbling.');
 addLog('INFO', `Tetapan aktif: Interval=${pollInterval}s, MaxLen=${bioMaxLen}`);
 if (lastfmUsername) {
   addLog('INFO', `Last.fm Pengguna: ${lastfmUsername}`);
@@ -319,8 +378,9 @@ async function startServer() {
     const isBotManaged = currentTelegramBio.endsWith(INVISIBLE_MARKER);
     const inGracePeriod = !isBotManaged && state.manual_timestamp > 0;
     const timeElapsed = inGracePeriod ? currentTime - state.manual_timestamp : 0;
+    const expSecs = state.expiration_seconds || expirationSeconds;
     const gracePeriodRemainingSeconds = inGracePeriod
-      ? Math.max(0, EXPIRATION_SECONDS - timeElapsed)
+      ? Math.max(0, expSecs - timeElapsed)
       : 0;
 
     res.json({
@@ -339,6 +399,7 @@ async function startServer() {
       lastError,
       username: lastfmUsername || 'Demo User',
       hasApiKey: Boolean(lastfmApiKey),
+      apiKey: lastfmApiKey,
       simulatedSong: currentSimulatedSong,
       hasTelegramCredentials: Boolean(apiId && apiHash && sessionString),
       apiIdConfigured: Boolean(apiId),
@@ -372,13 +433,36 @@ async function startServer() {
     res.json({ success: true, currentBio: currentTelegramBio });
   });
 
+  app.post('/api/bot/generate-random-bio', async (req, res) => {
+    try {
+      const client = getGeminiClient();
+      if (!client) {
+        // Return a random preset fallback
+        const randomFallback = FALLBACK_BIOS[Math.floor(Math.random() * FALLBACK_BIOS.length)];
+        return res.json({ success: true, bio: randomFallback, source: 'preset' });
+      }
+
+      const response = await client.models.generateContent({
+        model: 'gemini-3.8-flash',
+        contents: 'Generate a short, funny, aesthetic, or relatable social media bio/status (maximum 100 characters). It must randomly be in either Bahasa Melayu, English, Manglish (Malaysian English), or Rojak (mix of Malay and English). Keep it short, casual, friendly, and cool. Use 1 or 2 emojis. Avoid sounding like a corporate advertisement or template. Output only the generated bio, no quotes, no extra conversational text.',
+      });
+
+      const bio = response.text ? response.text.trim().replace(/^"|"$/g, '') : FALLBACK_BIOS[0];
+      res.json({ success: true, bio, source: 'ai' });
+    } catch (error: any) {
+      console.error('Error generating AI bio:', error);
+      const randomFallback = FALLBACK_BIOS[Math.floor(Math.random() * FALLBACK_BIOS.length)];
+      res.json({ success: true, bio: randomFallback, source: 'fallback_after_error' });
+    }
+  });
+
   app.post('/api/bot/simulate-song', async (req, res) => {
-    const { song, artist, isPlaying } = req.body;
+    const { song, artist, isPlaying, prefix: customPrefix } = req.body;
     if (!song && !artist) {
       currentSimulatedSong = null;
       addLog('INFO', 'Mod simulasi lagu dimatikan. Menggunakan Last.fm API.');
     } else {
-      const prefix = isPlaying ? '🎶 Playing:' : '📻 Last Played:';
+      const prefix = customPrefix || (isPlaying ? '🎶 Playing:' : '📻 Last Played:');
       currentSimulatedSong = `${prefix} ${song || 'Unknown Song'} - ${artist || 'Unknown Artist'}`;
       addLog('INFO', `Lagu simulasi ditetapkan: ${currentSimulatedSong}`);
     }
@@ -399,6 +483,30 @@ async function startServer() {
     } else {
       res.status(400).json({ error: 'Tiada bio manual aktif untuk dipercepatkan.' });
     }
+  });
+
+  app.post('/api/bot/set-override', async (req, res) => {
+    const { type, durationSeconds } = req.body; // 'temporary' | 'permanent' | 'none'
+    const state = loadState();
+    const currentTime = Date.now() / 1000;
+
+    if (type === 'none') {
+      saveState(state.last_song, 0);
+      addLog('INFO', 'Sistem bertukar ke Mod Autonomi (Autonomous). Bot mengambil alih semula.');
+    } else if (type === 'permanent') {
+      saveState(state.last_song, -1);
+      addLog('INFO', 'Sistem bertukar ke Sekatan Kekal (Permanent Override). Bot tidak akan mengemas kini.');
+    } else {
+      const activeDuration = typeof durationSeconds === 'number' ? durationSeconds : expirationSeconds;
+      expirationSeconds = activeDuration;
+      saveState(state.last_song, currentTime, activeDuration);
+      const minutes = Math.round(activeDuration / 60);
+      const hours = (activeDuration / 3600).toFixed(1);
+      const displayTime = activeDuration < 3600 ? `${minutes} minit` : `${hours} jam`;
+      addLog('INFO', `Sistem bertukar ke Sekatan Sementara (Temporary ${displayTime}). Tempoh bertenang diaktifkan.`);
+    }
+    await runScrobbleCycle();
+    res.json({ success: true, manualTimestamp: loadState().manual_timestamp, expirationSeconds });
   });
 
   app.post('/api/bot/reset-state', (req, res) => {
@@ -451,6 +559,182 @@ async function startServer() {
       username: lastfmUsername,
       hasTelegramCredentials: Boolean(apiId && apiHash && sessionString),
     });
+  });
+
+  app.get('/api/lastfm-callback', async (req, res) => {
+    const token = req.query.token as string;
+    const apiKey = (req.query.apiKey as string) || lastfmApiKey;
+    const apiSecret = lastfmApiSecret;
+
+    if (!token) {
+      return res.send(`
+        <html>
+          <head>
+            <style>
+              body { background-color: #020617; color: #f1f5f9; font-family: sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; }
+              .card { background-color: #0f172a; padding: 2rem; border-radius: 12px; border: 1px solid #e11d48; text-align: center; }
+            </style>
+          </head>
+          <body>
+            <div class="card">
+              <h2>Error: Missing Token</h2>
+              <p>Authentication token was not received from Last.fm.</p>
+            </div>
+          </body>
+        </html>
+      `);
+    }
+
+    if (!apiKey) {
+      return res.send(`
+        <html>
+          <head>
+            <style>
+              body { background-color: #020617; color: #f1f5f9; font-family: sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; }
+              .card { background-color: #0f172a; padding: 2rem; border-radius: 12px; border: 1px solid #e11d48; text-align: center; }
+            </style>
+          </head>
+          <body>
+            <div class="card">
+              <h2>Error: Missing Last.fm API Key</h2>
+              <p>Please enter your Last.fm API Key in the settings first.</p>
+            </div>
+          </body>
+        </html>
+      `);
+    }
+
+    if (!apiSecret) {
+      return res.send(`
+        <html>
+          <head>
+            <style>
+              body { background-color: #020617; color: #f1f5f9; font-family: sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; }
+              .card { background-color: #0f172a; padding: 2rem; border-radius: 12px; border: 1px solid #e11d48; text-align: center; max-width: 450px; line-height: 1.5; }
+              h2 { color: #f43f5e; margin-top: 0; }
+              code { background: #1e293b; padding: 2px 6px; border-radius: 4px; font-family: monospace; font-size: 13px; color: #fda4af; }
+            </style>
+          </head>
+          <body>
+            <div class="card">
+              <h2>Error: Missing Server Shared Secret</h2>
+              <p>The server's <code>LASTFM_API_SECRET</code> environment variable has not been configured.</p>
+              <p style="color: #94a3b8; font-size: 13px; margin-top: 1rem;">To use the automatic username grabber, the application server requires an API Shared Secret configured under environment variables. Please configure the secret in your app settings.</p>
+            </div>
+          </body>
+        </html>
+      `);
+    }
+
+    try {
+      // 1. Generate api_sig for auth.getSession
+      const sigInput = `api_key${apiKey}methodauth.getSessiontoken${token}${apiSecret}`;
+      const crypto = await import('crypto');
+      const apiSig = crypto.createHash('md5').update(sigInput, 'utf-8').digest('hex');
+
+      // 2. Fetch session from Last.fm
+      const url = `https://ws.audioscrobbler.com/2.0/?method=auth.getSession&api_key=${apiKey}&token=${token}&api_sig=${apiSig}&format=json`;
+      const resp = await fetch(url, { headers: { 'User-Agent': 'telegram-bio-scrobbler/2.0' } });
+      const data: any = await resp.json();
+
+      if (data.error || !data.session) {
+        throw new Error(data.message || `Last.fm API returned error ${data.error}`);
+      }
+
+      const verifiedUser = data.session.name;
+      addLog('SUCCESS', `Last.fm Autograb berjaya! Pengguna: @${verifiedUser}`);
+
+      return res.send(`
+        <html>
+          <head>
+            <title>Last.fm Authorization Success</title>
+            <style>
+              body {
+                background-color: #020617;
+                color: #f8fafc;
+                font-family: ui-sans-serif, system-ui, sans-serif;
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                justify-content: center;
+                height: 100vh;
+                margin: 0;
+              }
+              .container {
+                text-align: center;
+                padding: 2.5rem;
+                background-color: #0f172a;
+                border-radius: 16px;
+                border: 1px solid #0284c7;
+                box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+                max-width: 400px;
+              }
+              h1 { color: #38bdf8; font-size: 1.5rem; margin-bottom: 0.5rem; }
+              p { color: #94a3b8; font-size: 0.875rem; line-height: 1.5; }
+              .user-badge {
+                display: inline-block;
+                margin: 1.25rem 0;
+                padding: 0.5rem 1rem;
+                background-color: #0c4a6e;
+                color: #38bdf8;
+                font-weight: bold;
+                font-family: monospace;
+                border-radius: 9999px;
+                border: 1px solid #0284c7;
+              }
+            </style>
+            <script>
+              if (window.opener) {
+                window.opener.postMessage({
+                  type: 'lastfm-auth-success',
+                  username: '${verifiedUser}',
+                  apiKey: '${apiKey}'
+                }, '*');
+              }
+              localStorage.setItem('lastfm_autograd', JSON.stringify({
+                username: '${verifiedUser}',
+                apiKey: '${apiKey}',
+                timestamp: Date.now()
+              }));
+              
+              setTimeout(() => {
+                window.close();
+              }, 2500);
+            </script>
+          </head>
+          <body>
+            <div class="container">
+              <div style="font-size: 3rem; margin-bottom: 1rem;">🎉</div>
+              <h1>Connection Successful!</h1>
+              <p>Your Last.fm account has been connected and the username has been automatically grabbed:</p>
+              <div class="user-badge">@${verifiedUser}</div>
+              <p style="color: #64748b; font-size: 11px;">This window will close automatically.</p>
+            </div>
+          </body>
+        </html>
+      `);
+    } catch (err: any) {
+      addLog('ERROR', `Autograb Last.fm gagal: ${err.message}`);
+      return res.send(`
+        <html>
+          <head>
+            <style>
+              body { background-color: #020617; color: #f1f5f9; font-family: sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; }
+              .card { background-color: #0f172a; padding: 2rem; border-radius: 12px; border: 1px solid #e11d48; text-align: center; max-width: 400px; }
+              h2 { color: #f43f5e; }
+              p { color: #94a3b8; }
+            </style>
+          </head>
+          <body>
+            <div class="card">
+              <h2>Connection Failed</h2>
+              <p>${err.message || err}</p>
+              <button onclick="window.close()" style="margin-top: 1rem; padding: 0.5rem 1rem; background-color: #e11d48; border: none; color: white; border-radius: 6px; cursor: pointer;">Close Window</button>
+            </div>
+          </body>
+        </html>
+      `);
+    }
   });
 
   // Test Connection: Last.fm

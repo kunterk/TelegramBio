@@ -15,6 +15,14 @@ export default function App() {
   const [isConfigOpen, setIsConfigOpen] = useState(false);
   const [isSessionHelperOpen, setIsSessionHelperOpen] = useState(false);
   const [openedHelperFromConfig, setOpenedHelperFromConfig] = useState(false);
+  const [showLogs, setShowLogs] = useState<boolean>(() => {
+    return localStorage.getItem('showLogs') === 'true';
+  });
+
+  const handleShowLogsChange = (newVal: boolean) => {
+    setShowLogs(newVal);
+    localStorage.setItem('showLogs', String(newVal));
+  };
 
   // Settings draft state - preserves all user-keyed inputs even when navigating to helper or before saving
   const [configDraft, setConfigDraft] = useState<ConfigDraft>({
@@ -26,6 +34,23 @@ export default function App() {
     pollInterval: 30,
     bioMaxLen: 140,
   });
+
+  const [hasInitializedDraft, setHasInitializedDraft] = useState(false);
+
+  useEffect(() => {
+    if (status && !hasInitializedDraft) {
+      setConfigDraft({
+        username: status.username === 'Demo User' ? '' : status.username,
+        apiKey: status.apiKey || '',
+        apiId: status.apiIdConfigured ? '*****' : '',
+        apiHash: status.apiHashConfigured ? '*****' : '',
+        sessionString: status.sessionStringConfigured ? '*****' : '',
+        pollInterval: status.pollInterval || 30,
+        bioMaxLen: status.bioMaxLen || 140,
+      });
+      setHasInitializedDraft(true);
+    }
+  }, [status, hasInitializedDraft]);
 
   const fetchStatusAndLogs = async () => {
     try {
@@ -80,12 +105,12 @@ export default function App() {
     }
   };
 
-  const handleSimulateSong = async (song: string, artist: string, isPlaying: boolean) => {
+  const handleSimulateSong = async (song: string, artist: string, isPlaying: boolean, prefix?: string) => {
     try {
       await fetch('/api/bot/simulate-song', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ song, artist, isPlaying }),
+        body: JSON.stringify({ song, artist, isPlaying, prefix }),
       });
       await fetchStatusAndLogs();
     } catch (e) {
@@ -106,13 +131,31 @@ export default function App() {
     }
   };
 
-  const handleSimulateManualBio = async (bio: string) => {
+  const handleSimulateManualBio = async (bio: string, overrideTimer?: string) => {
     try {
       await fetch('/api/bot/simulate-manual-bio', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ bio }),
       });
+
+      if (overrideTimer) {
+        if (overrideTimer === 'permanent') {
+          await fetch('/api/bot/set-override', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ type: 'permanent' }),
+          });
+        } else {
+          const durationSeconds = parseInt(overrideTimer, 10);
+          await fetch('/api/bot/set-override', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ type: 'temporary', durationSeconds }),
+          });
+        }
+      }
+
       await fetchStatusAndLogs();
     } catch (e) {
       console.error('Failed to simulate manual bio edit:', e);
@@ -138,6 +181,19 @@ export default function App() {
       await fetchStatusAndLogs();
     } catch (e) {
       console.error('Failed to reset state:', e);
+    }
+  };
+
+  const handleSetOverride = async (type: 'temporary' | 'permanent' | 'none') => {
+    try {
+      await fetch('/api/bot/set-override', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type }),
+      });
+      await fetchStatusAndLogs();
+    } catch (e) {
+      console.error('Failed to set override type:', e);
     }
   };
 
@@ -262,6 +318,7 @@ export default function App() {
           status={status}
           onFastForward={handleFastForward}
           onResetState={handleResetState}
+          onSetOverride={handleSetOverride}
           onOpenSessionHelper={() => {
             setOpenedHelperFromConfig(false);
             setIsSessionHelperOpen(true);
@@ -269,10 +326,11 @@ export default function App() {
         />
 
         {/* Row 2: Live Decision Tree Route */}
-        <DecisionTreeViewer status={status} />
+        {showLogs && <DecisionTreeViewer status={status} />}
 
         {/* Row 3: Interactive Simulation Sandbox */}
         <SimulationSandbox
+          status={status}
           currentSimulatedSong={status?.simulatedSong ?? null}
           onSimulateSong={handleSimulateSong}
           onClearSimulatedSong={handleClearSimulatedSong}
@@ -281,7 +339,7 @@ export default function App() {
         />
 
         {/* Row 4: Real-time Structured Logs Console */}
-        <LogsConsole logs={logs} onClearLogs={handleClearLogs} />
+        {showLogs && <LogsConsole logs={logs} onClearLogs={handleClearLogs} />}
       </main>
 
       {/* Settings Modal */}
@@ -294,6 +352,8 @@ export default function App() {
           onSaveConfig={handleSaveConfig}
           draft={configDraft}
           onDraftChange={setConfigDraft}
+          showLogs={showLogs}
+          onShowLogsChange={handleShowLogsChange}
         />
       )}
 

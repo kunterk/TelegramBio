@@ -35,12 +35,9 @@ export const Header: React.FC<HeaderProps> = ({
                 Telegram Bio Scrobbler
               </h1>
               <span className="text-xs px-2 py-0.5 rounded-full font-mono bg-sky-950 text-sky-300 border border-sky-800">
-                v2.0
+                v1.0
               </span>
             </div>
-            <p className="text-xs text-slate-400 hidden sm:block">
-              Hybrid Failsafe (Zero-Width Marker &bull; State Cache &bull; 24h Override)
-            </p>
           </div>
         </div>
 
